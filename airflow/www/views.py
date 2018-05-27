@@ -1408,7 +1408,7 @@ class Airflow(BaseView):
         drs = (
             session.query(DR)
                 .filter_by(dag_id=dag_id)
-                .order_by(desc(DR.execution_date)).all()
+                .order_by(desc(DR.execution_date)).limit(3).all()
         )
         dr_choices = []
         dr_state = None
