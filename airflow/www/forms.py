@@ -24,7 +24,7 @@ from flask_wtf import Form
 
 
 class DateTimeForm(Form):
-    # Date filter form needed for gantt and graph view
+    # Date filter form for task views
     execution_date = DateTimeField(
         "Execution date", widget=DateTimePickerWidget())
 
@@ -42,3 +42,7 @@ class DateTimeWithNumRunsForm(Form):
         (365, "365"),
     ))
 
+
+class DateTimeWithNumRunsWithDagRunsForm(DateTimeWithNumRunsForm):
+    # Date time and number of runs and dag runs form for graph and gantt view
+    execution_date = SelectField("DAG run")
