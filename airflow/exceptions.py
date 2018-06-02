@@ -33,6 +33,10 @@ class AirflowSensorTimeout(AirflowException):
     pass
 
 
+class AirflowRescheduleTask(AirflowException):
+    pass
+
+
 class AirflowTaskTimeout(AirflowException):
     pass
 
