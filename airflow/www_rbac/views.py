@@ -1506,12 +1506,27 @@ class Airflow(AirflowBaseView):
                     TF.execution_date == ti.execution_date)
             .all()
         ) for ti in tis]))
-        tis_with_fails = sorted(tis + ti_fails, key=lambda ti: ti.start_date)
+        TR = models.TaskReschedule
+        ti_reschedules = list(itertools.chain(*[(
+            session
+            .query(TR)
+            .filter(TR.dag_id == ti.dag_id,
+                    TR.task_id == ti.task_id,
+                    TR.execution_date == ti.execution_date)
+            .all()
+        ) for ti in tis]))
+        tis_with_fails_and_reschedules = sorted(
+            tis + ti_fails + ti_reschedules, key=lambda ti: ti.start_date)
 
         tasks = []
-        for ti in tis_with_fails:
+        for ti in tis_with_fails_and_reschedules:
             end_date = ti.end_date if ti.end_date else timezone.utcnow()
-            state = ti.state if type(ti) == models.TaskInstance else State.FAILED
+            if type(ti) == models.TaskInstance:
+                state = ti.state
+            elif type(ti) == TF:
+                state = State.FAILED
+            elif type(ti) == TR:
+                state = State.UP_FOR_RETRY
             tasks.append({
                 'startDate': wwwutils.epoch(ti.start_date),
                 'endDate': wwwutils.epoch(end_date),

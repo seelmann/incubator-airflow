@@ -71,7 +71,8 @@ from airflow import settings, utils
 from airflow.executors import GetDefaultExecutor, LocalExecutor
 from airflow import configuration
 from airflow.exceptions import (
-    AirflowDagCycleException, AirflowException, AirflowSkipException, AirflowTaskTimeout
+    AirflowDagCycleException, AirflowException, AirflowSkipException, AirflowTaskTimeout,
+    AirflowRescheduleTask
 )
 from airflow.dag.base_dag import BaseDag, BaseDagBag
 from airflow.lineage import apply_lineage, prepare_lineage
@@ -1636,6 +1637,10 @@ class TaskInstance(Base, LoggingMixin):
         except AirflowSkipException:
             self.refresh_from_db(lock_for_update=True)
             self.state = State.SKIPPED
+        except AirflowRescheduleTask:
+            self.refresh_from_db()
+            self.handle_reschedule(test_mode, context)
+            return
         except AirflowException as e:
             self.refresh_from_db()
             # for case when task is marked as success externally
@@ -1706,6 +1711,26 @@ class TaskInstance(Base, LoggingMixin):
 
         self.render_templates()
         task_copy.dry_run()
+
+    @provide_session
+    def handle_reschedule(self, test_mode=False, context=None, session=None):
+        self.end_date = timezone.utcnow()
+        self.set_duration()
+
+        # Log reschedule
+        session.add(TaskReschedule(self.task, self.execution_date, self.start_date,
+                    self.end_date))
+
+        self.state = State.UP_FOR_RETRY
+
+        # TODO: increment max_tries or decrement try_number?
+        self._try_number -= 1
+        #self.max_tries += 1
+
+        if not test_mode:
+            session.merge(self)
+        session.commit()
+        self.log.info('Rescheduling task, marking task as UP_FOR_RETRY')
 
     @provide_session
     def handle_failure(self, error, test_mode=False, context=None, session=None):
@@ -2040,6 +2065,37 @@ class TaskFail(Base):
     __table_args__ = (
         Index('idx_task_fail_dag_task_date', dag_id, task_id, execution_date,
               unique=False),
+    )
+
+    def __init__(self, task, execution_date, start_date, end_date):
+        self.dag_id = task.dag_id
+        self.task_id = task.task_id
+        self.execution_date = execution_date
+        self.start_date = start_date
+        self.end_date = end_date
+        if self.end_date and self.start_date:
+            self.duration = (self.end_date - self.start_date).total_seconds()
+        else:
+            self.duration = None
+
+
+class TaskReschedule(Base):
+    """
+    TaskReschedule tracks rescheduled task instances.
+    """
+
+    __tablename__ = "task_reschedule"
+
+    id = Column(Integer, primary_key=True)
+    task_id = Column(String(ID_LEN), nullable=False)
+    dag_id = Column(String(ID_LEN), nullable=False)
+    execution_date = Column(UtcDateTime, nullable=False)
+    start_date = Column(UtcDateTime)
+    end_date = Column(UtcDateTime)
+    duration = Column(Integer)
+
+    __table_args__ = (
+        Index('idx_task_reschedule_dag_task_date', dag_id, task_id, execution_date, unique=False),
     )
 
     def __init__(self, task, execution_date, start_date, end_date):
