@@ -21,7 +21,7 @@
 from time import sleep
 
 from airflow.exceptions import AirflowException, AirflowSensorTimeout, \
-    AirflowSkipException
+    AirflowSkipException, AirflowSensorSuspend
 from airflow.models import BaseOperator
 from airflow.utils import timezone
 from airflow.utils.decorators import apply_defaults
@@ -41,6 +41,8 @@ class BaseSensorOperator(BaseOperator):
     :type poke_interval: int
     :param timeout: Time, in seconds before the task times out and fails.
     :type timeout: int
+    :param suspend: Suspend this sensor...
+    :type suspend: bool
     """
     ui_color = '#e6f1f2'
 
@@ -49,12 +51,14 @@ class BaseSensorOperator(BaseOperator):
                  poke_interval=60,
                  timeout=60 * 60 * 24 * 7,
                  soft_fail=False,
+                 suspend=False,
                  *args,
                  **kwargs):
         super(BaseSensorOperator, self).__init__(*args, **kwargs)
         self.poke_interval = poke_interval
         self.soft_fail = soft_fail
         self.timeout = timeout
+        self.suspend = suspend
 
     def poke(self, context):
         """
@@ -71,5 +75,7 @@ class BaseSensorOperator(BaseOperator):
                     raise AirflowSkipException('Snap. Time is OUT.')
                 else:
                     raise AirflowSensorTimeout('Snap. Time is OUT.')
+            if self.suspend:
+                raise AirflowSensorSuspend('Suspend')
             sleep(self.poke_interval)
         self.log.info("Success criteria met. Exiting.")

@@ -71,7 +71,8 @@ from airflow import settings, utils
 from airflow.executors import GetDefaultExecutor, LocalExecutor
 from airflow import configuration
 from airflow.exceptions import (
-    AirflowDagCycleException, AirflowException, AirflowSkipException, AirflowTaskTimeout
+    AirflowDagCycleException, AirflowException, AirflowSkipException, AirflowTaskTimeout,
+    AirflowSensorSuspend
 )
 from airflow.dag.base_dag import BaseDag, BaseDagBag
 from airflow.lineage import apply_lineage, prepare_lineage
@@ -1636,6 +1637,15 @@ class TaskInstance(Base, LoggingMixin):
         except AirflowSkipException:
             self.refresh_from_db(lock_for_update=True)
             self.state = State.SKIPPED
+        except AirflowSensorSuspend:
+            self.refresh_from_db(lock_for_update=True)
+            self.state = State.SCHEDULED
+            self._try_number -= 1
+            if not test_mode:
+                session.merge(self)
+            session.commit()
+            self.log.info('Sensor supend request: re-scheduled task')
+            return
         except AirflowException as e:
             self.refresh_from_db()
             # for case when task is marked as success externally
