@@ -28,6 +28,7 @@ import math
 import json
 import bleach
 from collections import defaultdict
+import itertools
 
 import inspect
 from textwrap import dedent
@@ -1729,31 +1730,36 @@ class Airflow(BaseView):
             ti for ti in dag.get_task_instances(session, dttm, dttm)
             if ti.start_date]
         tis = sorted(tis, key=lambda ti: ti.start_date)
+        TF = models.TaskFail
+        ti_fails = list(itertools.chain(*[(
+            session
+            .query(TF)
+            .filter(TF.dag_id == ti.dag_id,
+                    TF.task_id == ti.task_id,
+                    TF.execution_date == ti.execution_date)
+            .all()
+        ) for ti in tis]))
+        TR = models.TaskReschedule
+        ti_reschedules = list(itertools.chain(*[(
+            session
+            .query(TR)
+            .filter(TR.dag_id == ti.dag_id,
+                    TR.task_id == ti.task_id,
+                    TR.execution_date == ti.execution_date)
+            .all()
+        ) for ti in tis]))
+        tis_with_fails_and_reschedules = sorted(
+            tis + ti_fails + ti_reschedules, key=lambda ti: ti.start_date)
 
         tasks = []
-        for ti in tis:
-            TF = models.TaskFail
-            ti_fails = (
-                session
-                .query(TF)
-                .filter(TF.dag_id == ti.dag_id,
-                        TF.task_id == ti.task_id,
-                        TF.execution_date == ti.execution_date)
-                .all()
-            )
-            ti_fails = sorted(ti_fails, key=lambda ti_fail: ti_fail.start_date)
-            for ti_fail in ti_fails:
-                tasks.append({
-                    'startDate': wwwutils.epoch(ti_fail.start_date),
-                    'endDate': wwwutils.epoch(ti_fail.end_date),
-                    'isoStart': ti_fail.start_date.isoformat()[:-4],
-                    'isoEnd': ti_fail.end_date.isoformat()[:-4],
-                    'taskName': ti_fail.task_id,
-                    'duration': "{}".format(ti_fail.end_date - ti_fail.start_date)[:-4],
-                    'status': State.FAILED,
-                    'executionDate': ti.execution_date.isoformat(),
-                })
+        for ti in tis_with_fails_and_reschedules:
             end_date = ti.end_date if ti.end_date else datetime.utcnow()
+            if type(ti) == models.TaskInstance:
+                state = ti.state
+            elif type(ti) == TF:
+                state = State.FAILED
+            elif type(ti) == TR:
+                state = State.UP_FOR_RETRY
             tasks.append({
                 'startDate': wwwutils.epoch(ti.start_date),
                 'endDate': wwwutils.epoch(end_date),
@@ -1761,7 +1767,7 @@ class Airflow(BaseView):
                 'isoEnd': end_date.isoformat()[:-4],
                 'taskName': ti.task_id,
                 'duration': "{}".format(end_date - ti.start_date)[:-4],
-                'status': ti.state,
+                'status': state,
                 'executionDate': ti.execution_date.isoformat(),
             })
         states = {task['status']: task['status'] for task in tasks}
