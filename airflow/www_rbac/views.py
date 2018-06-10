@@ -1503,6 +1503,27 @@ class Airflow(AirflowBaseView):
 
         tasks = []
         for ti in tis:
+            TF = models.TaskFail
+            ti_fails = (
+                session
+                .query(TF)
+                .filter(TF.dag_id == ti.dag_id,
+                        TF.task_id == ti.task_id,
+                        TF.execution_date == ti.execution_date)
+                .all()
+            )
+            ti_fails = sorted(ti_fails, key=lambda ti_fail: ti_fail.start_date)
+            for ti_fail in ti_fails:
+                tasks.append({
+                    'startDate': wwwutils.epoch(ti_fail.start_date),
+                    'endDate': wwwutils.epoch(ti_fail.end_date),
+                    'isoStart': ti_fail.start_date.isoformat()[:-4],
+                    'isoEnd': ti_fail.end_date.isoformat()[:-4],
+                    'taskName': ti_fail.task_id,
+                    'duration': "{}".format(ti_fail.end_date - ti_fail.start_date)[:-4],
+                    'status': State.FAILED,
+                    'executionDate': ti.execution_date.isoformat(),
+                })
             end_date = ti.end_date if ti.end_date else timezone.utcnow()
             tasks.append({
                 'startDate': wwwutils.epoch(ti.start_date),
@@ -1514,7 +1535,7 @@ class Airflow(AirflowBaseView):
                 'status': ti.state,
                 'executionDate': ti.execution_date.isoformat(),
             })
-        states = {ti.state: ti.state for ti in tis}
+        states = {task['status']: task['status'] for task in tasks}
         data = {
             'taskNames': [ti.task_id for ti in tis],
             'tasks': tasks,
