@@ -1884,9 +1884,10 @@ class TaskFail(Base):
 
     __tablename__ = "task_fail"
 
-    task_id = Column(String(ID_LEN), primary_key=True)
-    dag_id = Column(String(ID_LEN), primary_key=True)
-    execution_date = Column(DateTime, primary_key=True)
+    id = Column(Integer, primary_key=True)
+    task_id = Column(String(ID_LEN))
+    dag_id = Column(String(ID_LEN))
+    execution_date = Column(DateTime)
     start_date = Column(DateTime)
     end_date = Column(DateTime)
     duration = Column(Float)
