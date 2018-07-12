@@ -19,12 +19,14 @@
 
 
 from time import sleep
+from datetime import timedelta
 
 from airflow.exceptions import AirflowException, AirflowSensorTimeout, \
-    AirflowSkipException
-from airflow.models import BaseOperator, SkipMixin
+    AirflowSkipException, AirflowRescheduleException
+from airflow.models import BaseOperator, SkipMixin, TaskReschedule
 from airflow.utils import timezone
 from airflow.utils.decorators import apply_defaults
+from airflow.ti_deps.deps.ready_to_reschedule import ReadyToRescheduleDep
 
 
 class BaseSensorOperator(BaseOperator, SkipMixin):
@@ -41,6 +43,9 @@ class BaseSensorOperator(BaseOperator, SkipMixin):
     :type poke_interval: int
     :param timeout: Time, in seconds before the task times out and fails.
     :type timeout: int
+    :param reschedule: Set to true to reschedule the sensor task instead of
+        sleeping if criteria is not yet met.
+    :type reschedule: bool
     """
     ui_color = '#e6f1f2'
 
@@ -49,12 +54,14 @@ class BaseSensorOperator(BaseOperator, SkipMixin):
                  poke_interval=60,
                  timeout=60 * 60 * 24 * 7,
                  soft_fail=False,
+                 reschedule=False,
                  *args,
                  **kwargs):
         super(BaseSensorOperator, self).__init__(*args, **kwargs)
         self.poke_interval = poke_interval
         self.soft_fail = soft_fail
         self.timeout = timeout
+        self.reschedule = reschedule
 
     def poke(self, context):
         """
@@ -65,6 +72,11 @@ class BaseSensorOperator(BaseOperator, SkipMixin):
 
     def execute(self, context):
         started_at = timezone.utcnow()
+        if self.reschedule:
+            # If reschedule, use first start date of current try
+            task_reschedules = TaskReschedule.find_for_task_instance(context['ti'])
+            if task_reschedules:
+                started_at = task_reschedules[0].start_date
         while not self.poke(context):
             if (timezone.utcnow() - started_at).total_seconds() > self.timeout:
                 # If sensor is in soft fail mode but will be retried then
@@ -75,7 +87,12 @@ class BaseSensorOperator(BaseOperator, SkipMixin):
                     raise AirflowSkipException('Snap. Time is OUT.')
                 else:
                     raise AirflowSensorTimeout('Snap. Time is OUT.')
-            sleep(self.poke_interval)
+            if self.reschedule:
+                reschedule_date = timezone.utcnow() + timedelta(
+                    seconds=self.poke_interval)
+                raise AirflowRescheduleException(reschedule_date)
+            else:
+                sleep(self.poke_interval)
         self.log.info("Success criteria met. Exiting.")
 
     def _do_skip_downstream_tasks(self, context):
@@ -83,3 +100,7 @@ class BaseSensorOperator(BaseOperator, SkipMixin):
         self.log.debug("Downstream task_ids %s", downstream_tasks)
         if downstream_tasks:
             self.skip(context['dag_run'], context['ti'].execution_date, downstream_tasks)
+
+    @property
+    def deps(self):
+        return BaseOperator.deps.fget(self) | {ReadyToRescheduleDep()}
