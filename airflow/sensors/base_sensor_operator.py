@@ -31,10 +31,10 @@ from airflow.ti_deps.deps.ready_to_reschedule import ReadyToRescheduleDep
 
 class BaseSensorOperator(BaseOperator, SkipMixin):
     """
-    Sensor operators are derived from this class an inherit these attributes.
+    Sensor operators are derived from this class and inherit these attributes.
 
     Sensor operators keep executing at a time interval and succeed when
-        a criteria is met and fail if and when they time out.
+    a criteria is met and fail if and when they time out.
 
     :param soft_fail: Set to true to mark the task as SKIPPED on failure
     :type soft_fail: bool
@@ -43,25 +43,42 @@ class BaseSensorOperator(BaseOperator, SkipMixin):
     :type poke_interval: int
     :param timeout: Time, in seconds before the task times out and fails.
     :type timeout: int
-    :param reschedule: Set to true to reschedule the sensor task instead of
-        sleeping if criteria is not yet met.
-    :type reschedule: bool
+    :param mode: How the sensor operates.
+        Options are: ``{ poke | reschedule }``, default is ``poke``.
+        When set to ``poke`` the sensor is taking up a worker slot for its
+        whole execution time and sleeps between pokes. Use this mode if the
+        expected runtime of the sensor is short or if a short poke interval
+        is requried.
+        When set to ``reschedule`` the sensor task frees the worker slot when
+        the criteria is not yet met and it's rescheduled at a later time. Use
+        this mode if the expected time until the criteria is met is. The poke
+        inteval should be more than one minute to prevent too much load on
+        the scheduler.
+    :type mode: str
     """
     ui_color = '#e6f1f2'
+    valid_modes = ['poke', 'reschedule']
 
     @apply_defaults
     def __init__(self,
                  poke_interval=60,
                  timeout=60 * 60 * 24 * 7,
                  soft_fail=False,
-                 reschedule=False,
+                 mode='poke',
                  *args,
                  **kwargs):
         super(BaseSensorOperator, self).__init__(*args, **kwargs)
         self.poke_interval = poke_interval
         self.soft_fail = soft_fail
         self.timeout = timeout
-        self.reschedule = reschedule
+        if mode not in self.valid_modes:
+            raise AirflowException(
+                "The mode must be one of {valid_modes},"
+                "'{d}.{t}'; received '{m}'."
+                .format(valid_modes=self.valid_modes,
+                        d=self.dag.dag_id if self.dag else "",
+                        t=self.task_id, m=mode))
+        self.mode = mode
 
     def poke(self, context):
         """
@@ -100,6 +117,10 @@ class BaseSensorOperator(BaseOperator, SkipMixin):
         self.log.debug("Downstream task_ids %s", downstream_tasks)
         if downstream_tasks:
             self.skip(context['dag_run'], context['ti'].execution_date, downstream_tasks)
+
+    @property
+    def reschedule(self):
+        return self.mode == 'reschedule'
 
     @property
     def deps(self):
