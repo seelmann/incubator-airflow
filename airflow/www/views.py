@@ -55,6 +55,7 @@ from past.builtins import basestring, unicode
 from pygments import highlight, lexers
 from pygments.formatters import HtmlFormatter
 from sqlalchemy import or_, desc, and_, union_all
+from sqlalchemy.sql.expression import literal
 from wtforms import (
     Form, SelectField, TextAreaField, PasswordField,
     StringField, validators)
@@ -364,6 +365,24 @@ def get_date_time_num_runs_dag_runs_form_data(request, session, dag):
         'dr_state': dr_state,
     }
 
+def is_rescheduled(session, ti):
+    if ti.state != State.NONE:
+        return False
+    TR = models.TaskReschedule
+    exists = session.query(session.query(TR)
+        .filter(TR.dag_id == ti.dag_id)
+        .filter(TR.task_id == ti.task_id)
+        .filter(TR.execution_date == ti.execution_date)
+        .exists())
+    return exists[0][0]
+
+def get_task_instances_with_rescheduled_state(session, dag, start_date, end_date):
+    tis = dag.get_task_instances(session, start_date, end_date)
+    # TODO: use single query instead of loop
+    for ti in tis:
+        if is_rescheduled(session, ti):
+            ti.state = 'rescheduled'
+    return tis
 
 class Airflow(BaseView):
     def is_visible(self):
@@ -582,6 +601,7 @@ class Airflow(BaseView):
     @provide_session
     def task_stats(self, session=None):
         TI = models.TaskInstance
+        TR = models.TaskReschedule
         DagRun = models.DagRun
         Dag = models.DagModel
 
@@ -618,9 +638,27 @@ class Airflow(BaseView):
             .join(RunningDagRun, and_(
                 RunningDagRun.c.dag_id == TI.dag_id,
                 RunningDagRun.c.execution_date == TI.execution_date))
+            .filter(~session.query(TR)
+                .filter(TR.dag_id == TI.dag_id)
+                .filter(TR.task_id == TI.task_id)
+                .filter(TR.execution_date == TI.execution_date)
+                .filter(TI.state == State.NONE)
+                .exists())
+        )
+        RescheduledTI = (
+            session.query(TI.dag_id.label('dag_id'), literal('rescheduled').label('state'))
+            .join(RunningDagRun, and_(
+                RunningDagRun.c.dag_id == TI.dag_id,
+                RunningDagRun.c.execution_date == TI.execution_date))
+            .filter(session.query(TR)
+                .filter(TR.dag_id == TI.dag_id)
+                .filter(TR.task_id == TI.task_id)
+                .filter(TR.execution_date == TI.execution_date)
+                .filter(TI.state == State.NONE)
+                .exists())
         )
 
-        UnionTI = union_all(LastTI, RunningTI).alias('union_ti')
+        UnionTI = union_all(LastTI, RunningTI, RescheduledTI).alias('union_ti')
         qry = (
             session.query(UnionTI.c.dag_id, UnionTI.c.state, sqla.func.count())
             .group_by(UnionTI.c.dag_id, UnionTI.c.state)
@@ -636,13 +674,13 @@ class Airflow(BaseView):
         payload = {}
         for (dag_id, ) in dag_ids:
             payload[dag_id] = []
-            for state in State.task_states:
+            for state in State.task_states+('rescheduled',):
                 count = data.get(dag_id, {}).get(state, 0)
                 payload[dag_id].append({
                     'state': state,
                     'count': count,
                     'dag_id': dag_id,
-                    'color': State.color(state)
+                    'color': 'turquoise' if state == 'rescheduled' else State.color(state)
                 })
         return wwwutils.json_response(payload)
 
@@ -1416,8 +1454,8 @@ class Airflow(BaseView):
         max_date = max(dates) if dates else None
         min_date = min(dates) if dates else None
 
-        tis = dag.get_task_instances(
-            session, start_date=min_date, end_date=base_date)
+        tis = get_task_instances_with_rescheduled_state(
+            session, dag, start_date=min_date, end_date=base_date)
         task_instances = {}
         for ti in tis:
             tid = alchemy_to_dict(ti)
@@ -1483,7 +1521,7 @@ class Airflow(BaseView):
 
         # minimize whitespace as this can be huge for bigger dags
         data = json.dumps(data, default=json_ser, separators=(',', ':'))
-        session.commit()
+        #session.commit()
 
         form = DateTimeWithNumRunsForm(data={'base_date': max_date,
                                              'num_runs': num_runs})
@@ -1561,7 +1599,7 @@ class Airflow(BaseView):
 
         task_instances = {
             ti.task_id: alchemy_to_dict(ti)
-            for ti in dag.get_task_instances(session, dttm, dttm)}
+            for ti in get_task_instances_with_rescheduled_state(session, dag, dttm, dttm)}
         tasks = {
             t.task_id: {
                 'dag_id': t.dag_id,
@@ -1570,7 +1608,7 @@ class Airflow(BaseView):
             for t in dag.tasks}
         if not tasks:
             flash("No tasks found", "error")
-        session.commit()
+        #session.commit()
         doc_md = markdown.markdown(dag.doc_md) if hasattr(dag, 'doc_md') and dag.doc_md else ''
 
         return self.render(
@@ -1947,11 +1985,15 @@ class Airflow(BaseView):
                 sorted(tis + ti_fails + ti_reschedules, key=lambda ti: ti.task_id),
                 key=lambda ti: ti.task_id):
             start_date = None
+            rescheduled = False
             for i in sorted(items, key=lambda ti: ti.start_date):
                 start_date = start_date or i.start_date
                 end_date = i.end_date or timezone.utcnow()
                 if type(i) == models.TaskInstance:
-                    gantt_bar_items.append((task_id, start_date, end_date, i.state))
+                    rescheduled = True
+                if type(i) == models.TaskInstance:
+                    state = 'rescheduled' if rescheduled and i.state == State.NONE else i.state
+                    gantt_bar_items.append((task_id, start_date, end_date, state))
                     start_date = None
                 elif type(i) == TF and (len(gantt_bar_items) == 0 or
                                         end_date != gantt_bar_items[-1][2]):

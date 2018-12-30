@@ -44,6 +44,9 @@ rect.null, rect.scheduled, rect.undefined {
 rect.success {
     fill: green;
 }
+rect.rescheduled {
+    fill: turquoise;
+}
 rect.running {
     fill: lime;
 }
