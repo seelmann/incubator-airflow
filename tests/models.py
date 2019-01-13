@@ -1824,6 +1824,12 @@ class DagBagTest(unittest.TestCase):
 
 class TaskInstanceTest(unittest.TestCase):
 
+    def tearDown(self):
+        with create_session() as session:
+            session.query(models.TaskFail).delete()
+            session.query(models.TaskReschedule).delete()
+            session.query(models.TaskInstance).delete()
+
     def test_set_task_dates(self):
         """
         Test that tasks properly take start/end dates from DAGs
@@ -2268,7 +2274,6 @@ class TaskInstanceTest(unittest.TestCase):
         done, fail = True, False
         run_ti_and_assert(date4, date1, date4, 180, State.SUCCESS, 1, 0)
 
-        """
         # Clear the task instance.
         dag.clear()
         ti.refresh_from_db()
@@ -2290,7 +2295,6 @@ class TaskInstanceTest(unittest.TestCase):
 
         done, fail = True, False
         run_ti_and_assert(date4, date3, date4, 60, State.SUCCESS, 3, 0)
-        """
 
     def test_depends_on_past(self):
         dagbag = models.DagBag()
