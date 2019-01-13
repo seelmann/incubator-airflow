@@ -37,7 +37,7 @@ import pendulum
 import six
 from mock import ANY, Mock, mock_open, patch
 from parameterized import parameterized
-# from freezegun import freeze_time
+from freezegun import freeze_time
 
 from airflow import AirflowException, configuration, models, settings
 from airflow.contrib.sensors.python_sensor import PythonSensor
@@ -48,7 +48,7 @@ from airflow.models import DagModel, DagRun
 from airflow.models import KubeResourceVersion, KubeWorkerIdentifier
 from airflow.models import SkipMixin
 from airflow.models import State as ST
-# from airflow.models import TaskReschedule as TR
+from airflow.models import TaskReschedule as TR
 from airflow.models import XCom
 from airflow.models import clear_task_instances
 from airflow.models.connection import Connection
@@ -2227,7 +2227,6 @@ class TaskInstanceTest(unittest.TestCase):
         self.assertEqual(ti._try_number, 0)
         self.assertEqual(ti.try_number, 1)
 
-        """
         def run_ti_and_assert(run_date, expected_start_date, expected_end_date, expected_duration,
                               expected_state, expected_try_number, expected_task_reschedule_count):
             with freeze_time(run_date):
@@ -2269,6 +2268,7 @@ class TaskInstanceTest(unittest.TestCase):
         done, fail = True, False
         run_ti_and_assert(date4, date1, date4, 180, State.SUCCESS, 1, 0)
 
+        """
         # Clear the task instance.
         dag.clear()
         ti.refresh_from_db()
