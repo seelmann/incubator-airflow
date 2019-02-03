@@ -22,7 +22,7 @@ import os
 from sqlalchemy import or_
 
 from airflow import models
-from airflow.models.taskfail import TaskFail
+from airflow.models.taskreschedule import TaskReschedule
 from airflow.utils.db import provide_session
 from airflow.exceptions import DagNotFound, DagFileExists
 
@@ -48,17 +48,13 @@ def delete_dag(dag_id, keep_records_in_log=True, session=None):
 
     count = 0
 
+    # Must delete TaskReschedule first because of foreign key constraint to TaskInstance
     # noinspection PyUnresolvedReferences,PyProtectedMember
-    for m in models.base.Base._decl_class_registry.values():
+    for m in [TaskReschedule] + list(models.base.Base._decl_class_registry.values()):
         if hasattr(m, "dag_id"):
             if keep_records_in_log and m.__name__ == 'Log':
                 continue
             cond = or_(m.dag_id == dag_id, m.dag_id.like(dag_id + ".%"))
             count += session.query(m).filter(cond).delete(synchronize_session='fetch')
-
-    if dag.is_subdag:
-        p, c = dag_id.rsplit(".", 1)
-        for m in models.DagRun, TaskFail, models.TaskInstance:
-            count += session.query(m).filter(m.dag_id == p, m.task_id == c).delete()
 
     return count
